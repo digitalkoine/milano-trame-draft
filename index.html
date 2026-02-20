@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset='utf-8' />
+      <title>Trame — Milano ebraica nel tempo</title>
+      <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
+
+      <link rel="stylesheet" href="./css/leaflet.css">
+      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+      <script type="text/javascript" src="./js/Leaflet.Coordinates-0.1.5.min.js"></script>
+	    <link rel="stylesheet" href="./css/Leaflet.Coordinates-0.1.5.css"/>
+
+      <script src="js/Autolinker.min.js"></script>
+
+      <link rel="stylesheet" href="./css/leaflet-search.min.css"/>
+      <script src="js/leaflet-search.js"></script>
+
+      <link rel="stylesheet" href="./css/easy-button.css">
+      <script src="js/easy-button.js"></script>
+
+      <script type="text/javascript" src="./js/iso8601-js-period-master/iso8601.js"></script>
+
+      <script type="text/javascript" src="https://cdn.rawgit.com/socib/Leaflet.TimeDimension/master/dist/leaflet.timedimension.min.js"></script>
+      <link rel="stylesheet" href="https://cdn.rawgit.com/socib/Leaflet.TimeDimension/master/dist/leaflet.timedimension.control.min.css" />
+
+      <link rel="stylesheet" href="./css/MapStyle.css"/>
+      <link rel="stylesheet" href="./css/milano.css"/>
+
+      <script type="text/javascript" src="./js/milano_layer_style.js"></script>
+
+      <!-- Data -->
+      <script src="./data/milano_sites.js" type="text/javascript"></script>
+
+      <!-- GeoJSON builder -->
+      <script src="./js/trame/milano-geojson-creation.js" type="text/javascript"></script>
+
+      <!-- TimeDimension helper -->
+      <script type="text/javascript" src="./js/timedimension_layer_betweendates.js"></script>
+  </head>
+
+  <body>
+    <div id='map'></div>
+
+    <script type="text/javascript" src="./js/timedimension_map_milano.js"></script>
+
+    
+    <!--
+      Custom TRAME Milano logic (project-specific):
+      - Loads milanoSites (data/milano_sites.js)
+      - Builds a time-aware GeoJSON layer (start_date/end_date)
+      - Adds search + popups and a multi-select category filter (checkboxes)
+      - Starts the time animation automatically (autoplay)
+    -->
+<script>
+      // ---- Derive slider interval from data (fallback to 1927–2026) ----
+      function getYearRange(arr) {
+        var minY = 9999, maxY = 0;
+        for (var i = 0; i < arr.length; i++) {
+          var s = Number(arr[i].start_year);
+          var e = Number(arr[i].end_year);
+          if (!isNaN(s)) minY = Math.min(minY, s);
+          if (!isNaN(e)) maxY = Math.max(maxY, e);
+        }
+        if (minY === 9999) minY = 1927;
+        if (maxY === 0) maxY = 2026;
+        return { min: minY, max: maxY };
+      }
+
+      var yr = getYearRange(milanoSites);
+      var startISO = yr.min + "-01-01";
+      var endISO = yr.max + "-12-31";
+
+      var map = createAndSetUpMapMilano(startISO, endISO);
+
+      // ---- Build points GeoJSON ----
+      var sitesGeojson = buildPointsForSites(milanoSites);
+
+      // ---- Category list (used to build the checkbox filter UI) ----
+      // We collect distinct categories from the dataset and keep the original labels for display.
+      function getCategories(arr) {
+        var seen = {};
+        for (var i = 0; i < arr.length; i++) {
+          var c = (arr[i].categoria || '').toString().trim();
+          if (c) seen[c.toLowerCase()] = c;
+        }
+        var out = Object.keys(seen).map(function(k){ return seen[k]; });
+        out.sort(function(a,b){ return a.localeCompare(b, 'it'); });
+        return out;
+      }
+
+      var categories = getCategories(milanoSites);
+
+      var categoriesLowerAll = categories.map(function(x){ return (x || '').toString().trim().toLowerCase(); });
+      var activeCategoriesLower = categoriesLowerAll.slice(); // start with all selected
+
+      // Category colours (used by the point style and by the checkbox 'swatches').
+      // Keys are normalised to lower-case so matching is robust.
+      // If your dataset uses different labels, add aliases here (e.g., 'associazioni' -> same blue).
+      var CATEGORY_COLORS = {
+        "religioso": "#d95f0e",
+        "educazione": "#66bd63",
+        "associazione": "#74add1",
+        "associazioni": "#74add1",
+        "comunitario": "#fe9929",
+        "altro": "#ffb6c1",
+        "altro / non classificato": "#ffb6c1",
+        "non classificato": "#ffb6c1"
+      };
+
+      function bindPopupHtml(feature, layer) {
+        var p = feature.properties || {};
+        var yearsLabel = (p.start_year === p.end_year)
+          ? (p.start_year)
+          : (p.start_year + "–" + p.end_year);
+
+        var html = ''
+          + '<div>'
+          + '<h2 style="margin:0 0 6px 0;">' + (p.sito || '') + '</h2>'
+          + '<p style="margin:0 0 4px 0;"><strong>Categoria:</strong> ' + (p.categoria || p.category || '') + '</p>'
+          + (p.affiliazione ? '<p style="margin:0 0 4px 0;"><strong>Affiliazione:</strong> ' + p.affiliazione + '</p>' : '')
+          + (p.indirizzo ? '<p style="margin:0 0 4px 0;"><strong>Indirizzo:</strong> ' + p.indirizzo + '</p>' : '')
+          + '<p style="margin:0 0 6px 0;"><strong>Periodo:</strong> ' + yearsLabel + '</p>'
+          + (p.popup_text ? '<p style="margin:0 0 0 0;">' + p.popup_text + '</p>' : '')
+          + '</div>';
+
+        layer.bindPopup(html, { autoClose: false, closeOnClick: false });
+      }
+
+      function buildLayers(selectedCategoriesLower) {
+  // selectedCategoriesLower: array of lower-cased categories to show.
+  // If null/undefined -> show all. If empty -> show none.
+  var selected = Array.isArray(selectedCategoriesLower)
+    ? selectedCategoriesLower.map(function(x){ return (x || '').toString().trim().toLowerCase(); }).filter(Boolean)
+    : null;
+
+  var filtered;
+  if (selected === null) {
+    filtered = sitesGeojson; // all
+  } else if (selected.length === 0) {
+    filtered = { type: 'FeatureCollection', features: [] };
+  } else {
+    // Filter features whose categoria is in selected
+    filtered = {
+      type: 'FeatureCollection',
+      features: (sitesGeojson.features || []).filter(function(f) {
+        var p = (f.properties || {});
+        var craw = (p.category && p.category.toString().trim()) ? p.category : (p.categoria || '');
+        var c = craw.toString().trim().toLowerCase();
+        return selected.indexOf(c) !== -1;
+      })
+    };
+  }
+
+  var base = L.geoJSON(filtered, {
+    pointToLayer: function(feature, latlng) {
+      return L.circleMarker(latlng, style_sitepoint(feature));
+    },
+    onEachFeature: bindPopupHtml
+  });
+
+  var timed = L.TimeDimension.Layer.betweendates(
+    base,
+    { timeDimension: map.timeDimension }
+  );
+
+  return { base: base, timed: timed };
+}
+
+      // Initial layers (all categories)
+      var layers = buildLayers(null);
+      var baseGeoJsonLayer = layers.base;
+      var timeSitesLayer = layers.timed;
+
+      // ---- Layer selector (show/hide the temporal layer) ----
+      var overlayMaps = {
+        "Luoghi (Milano ebraica)": timeSitesLayer
+      };
+      // Keep top-right free for the category selector
+      var layerControl = L.control.layers(null, overlayMaps, { collapsed: false, position: 'topleft' }).addTo(map);
+
+      // Default: visible
+      timeSitesLayer.addTo(map);
+
+// ---- Shared references (for rebuilding layers when filters change) ----
+var searchControl = null;
+
+function rebuildOverlaysAndSearch() {
+  // Preserve whether the layer is currently visible
+  var wasVisible = map.hasLayer(timeSitesLayer);
+
+  // Remove old layer/control/search safely
+  try { if (layerControl) map.removeControl(layerControl); } catch(e) {}
+  try { if (searchControl) map.removeControl(searchControl); } catch(e) {}
+  try { if (map.hasLayer(timeSitesLayer)) map.removeLayer(timeSitesLayer); } catch(e) {}
+
+  // Rebuild layers using current activeCategoriesLower
+  var layersNew = buildLayers(activeCategoriesLower);
+  baseGeoJsonLayer = layersNew.base;
+  timeSitesLayer = layersNew.timed;
+
+  // Recreate layer selector
+  overlayMaps = { "Luoghi (Milano ebraica)": timeSitesLayer };
+  layerControl = L.control.layers(null, overlayMaps, { collapsed: false, position: 'topleft' }).addTo(map);
+
+  // Restore visibility
+  if (wasVisible) timeSitesLayer.addTo(map);
+
+  // Recreate search (binds to the rebuilt baseGeoJsonLayer)
+  searchControl = new L.Control.Search({
+    layer: baseGeoJsonLayer,
+    propertyName: 'sito',
+    marker: false,
+    moveToLocation: function(latlng, title, map) { map.setView(latlng, 15); },
+    textPlaceholder: 'Cerca un luogo…'
+  });
+  map.addControl(searchControl);
+
+  // Re-bind the search handler (defined below)
+  bindSearchAutoPopup();
+}
+
+      rebuildOverlaysAndSearch();
+
+      // ---- Category filter (top-right, multi-select) ----
+var CategoryControl = L.Control.extend({
+  options: { position: 'topright' },
+  onAdd: function() {
+    var container = L.DomUtil.create('div', 'leaflet-bar');
+    container.style.background = 'white';
+    container.style.padding = '10px 12px';
+    container.style.borderRadius = '10px';
+    container.style.boxShadow = '0 1px 6px rgba(0,0,0,0.25)';
+    container.style.minWidth = '220px';
+
+    var title = L.DomUtil.create('div', '', container);
+    title.style.fontSize = '13px';
+    title.style.marginBottom = '8px';
+    title.innerHTML = '<strong>Categoria</strong>';
+
+    function makeRow(labelText, color, checked, onChange) {
+      var row = L.DomUtil.create('label', '', container);
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '10px';
+      row.style.margin = '6px 0';
+      row.style.cursor = 'pointer';
+      row.style.userSelect = 'none';
+
+      var cb = L.DomUtil.create('input', '', row);
+      cb.type = 'checkbox';
+      cb.checked = !!checked;
+      cb.style.transform = 'scale(1.05)';
+
+      var dot = L.DomUtil.create('span', '', row);
+      dot.style.width = '18px';
+      dot.style.height = '18px';
+      dot.style.borderRadius = '999px';
+      dot.style.display = 'inline-block';
+      dot.style.background = color || '#999';
+      dot.style.border = '2px solid rgba(0,0,0,0.15)';
+
+      var txt = L.DomUtil.create('span', '', row);
+      txt.textContent = labelText;
+
+      cb.addEventListener('change', function() { onChange(cb.checked); });
+      return cb;
+    }
+
+    // "Tutte" checkbox
+    var allCb = makeRow('Tutte', '#555', true, function(isChecked) {
+      // toggle all categories
+      for (var i = 0; i < catCbs.length; i++) catCbs[i].checked = isChecked;
+      applyFromCheckboxes();
+    });
+
+    var divider = L.DomUtil.create('div', '', container);
+    divider.style.height = '1px';
+    divider.style.background = 'rgba(0,0,0,0.08)';
+    divider.style.margin = '8px 0';
+
+    var catCbs = [];
+
+    // Helper: color for a category (same mapping used by style_sitepoint)
+    function catColor(catName) {
+      var key = (catName || '').toString().trim().toLowerCase();
+      return (CATEGORY_COLORS && CATEGORY_COLORS[key]) ? CATEGORY_COLORS[key] : '#999';
+    }
+
+    for (var i = 0; i < categories.length; i++) {
+      (function(catName) {
+        var cb = makeRow(catName, catColor(catName), true, function() {
+          applyFromCheckboxes();
+        });
+        catCbs.push(cb);
+      })(categories[i]);
+    }
+
+    function applyFromCheckboxes() {
+      var selected = [];
+      for (var i = 0; i < categories.length; i++) {
+        if (catCbs[i].checked) selected.push(categoriesLowerAll[i]);
+      }
+      activeCategoriesLower = selected;
+
+      // Update "Tutte" checkbox state
+      allCb.checked = (selected.length === categories.length);
+
+      rebuildOverlaysAndSearch();
+    }
+
+    L.DomEvent.disableClickPropagation(container);
+    L.DomEvent.disableScrollPropagation(container);
+
+    return container;
+  }
+});
+
+map.addControl(new CategoryControl());
+
+
+// ---- Autoplay (robust) ----
+(function(){
+  function tryStart(){
+    try{
+      if (!map || !map._tdPlayer || !map._tdPlayer.start) return;
+      var playing = false;
+      try { if (typeof map._tdPlayer.isPlaying === 'function') playing = map._tdPlayer.isPlaying(); } catch(e) {}
+      if (!playing) map._tdPlayer.start();
+    } catch(e) {}
+  }
+  // Start after first time slice loads
+  map.timeDimension.on('timeload', function(){
+    // small delay so layers are in place
+    setTimeout(tryStart, 150);
+  });
+  // Fallbacks
+  window.addEventListener('load', function(){ setTimeout(tryStart, 600); });
+  setTimeout(tryStart, 1200);
+})();
+
+
+
+
+      // ---- Legend ----
+      // Legend removed
+      // ---- Search (by "sito" or address) ----
+      // Search control is (re)created by rebuildOverlaysAndSearch()
+// When a place is found via search, move there AND open its popup automatically.
+// We also jump the time slider inside the feature's time window so the feature is visible.
+function bindSearchAutoPopup() {
+  if (!searchControl) return;
+
+  // Remove previous listener (defensive)
+  map.off('search:locationfound');
+
+  map.on('search:locationfound', function(e) {
+    var lyr = e.layer;
+    if (!lyr || !lyr.feature || !lyr.feature.properties) return;
+
+    // Ensure the temporal layer is visible (user may have hidden it via layer selector)
+    if (!map.hasLayer(timeSitesLayer)) timeSitesLayer.addTo(map);
+
+    // Pause autoplay so the popup does not disappear on the next tick
+    try { if (map._tdPlayer && map._tdPlayer.isPlaying && map._tdPlayer.isPlaying()) map._tdPlayer.stop(); } catch(err) {}
+    try { if (map._tdControl && map._tdControl._player && map._tdControl._player.isPlaying && map._tdControl._player.isPlaying()) map._tdControl._player.stop(); } catch(err) {}
+
+    var uid = lyr.feature.properties._uid;
+    var t = Date.parse(String(lyr.feature.properties.start_date || '').trim());
+
+    function openWhenReady() { openPopupForUid(uid); }
+
+    if (!isNaN(t)) {
+      map.timeDimension.once('timeload', openWhenReady);
+      map.timeDimension.setCurrentTime(t);
+    } else {
+      openWhenReady();
+    }
+  });
+}
+
+// Don't auto-close popups when the search UI collapses.
+
+
+      // ---- A small console hint about missing coordinates ----
+      if (typeof milanoSitesNoCoords !== 'undefined' && milanoSitesNoCoords.length) {
+        console.log("Records without coordinates (not mapped):", milanoSitesNoCoords.length);
+      }
+      // ---- Autoplay (robust) ----
+(function enableAutoplay() {
+  var started = false;
+
+  function getPlayer() {
+    if (map && map._tdPlayer && typeof map._tdPlayer.start === 'function') return map._tdPlayer;
+    if (map && map._tdControl && map._tdControl._player && typeof map._tdControl._player.start === 'function') return map._tdControl._player;
+    return null;
+  }
+
+  function tryStart() {
+    if (started) return;
+    var p = getPlayer();
+    if (!p) return;
+    started = true;
+    try { p.start(); } catch(e) { started = false; }
+  }
+
+  map.whenReady(function() {
+    // Start after the first timeload so the control is fully initialised
+    if (map.timeDimension) {
+      map.timeDimension.once('timeload', function() { tryStart(); });
+    }
+    // Fallback: start anyway after a short delay
+    setTimeout(tryStart, 800);
+    setTimeout(tryStart, 1600);
+  });
+})();
+
+    </script>
+  </body>
+</html>
