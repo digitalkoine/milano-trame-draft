@@ -1,0 +1,35 @@
+/* Milano map custom UI (TRAME)
+   - Positions the category filter panel (top-right)
+   - Minor typography and spacing tweaks to match the original TRAME style
+*/
+
+/* Extra UI styling for the Milano Jewish sites view */
+
+.info.legend h4 {
+  margin: 0 0 8px 0;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.legend-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.25);
+  display: inline-block;
+}
+
+.legend-label {
+  font-size: 12px;
+}
+
+/* Make popups a bit easier to read */
+.leaflet-popup-content {
+  font-size: 12px;
+  line-height: 1.35;
+}
