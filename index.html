@@ -173,6 +173,16 @@
       // Default: visible
       timeSitesLayer.addTo(map);
 
+      // ---- Autoplay on load ----
+      // Start the TimeDimension player automatically when the map is ready.
+      try {
+        if (map && map._tdPlayer && typeof map._tdPlayer.start === 'function') {
+          // Small delay ensures the control/layers are fully attached.
+          setTimeout(function(){ try { map._tdPlayer.start(); } catch(e) {} }, 300);
+        }
+      } catch(e) {}
+
+
 // ---- Shared references (for rebuilding layers when filters change) ----
 var searchControl = null;
 
