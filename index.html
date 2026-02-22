@@ -43,15 +43,6 @@
     <div id='map'></div>
 
     <script type="text/javascript" src="./js/timedimension_map_milano.js"></script>
-
-    
-    <!--
-      Custom TRAME Milano logic (project-specific):
-      - Loads milanoSites (data/milano_sites.js)
-      - Builds a time-aware GeoJSON layer (start_date/end_date)
-      - Adds search + popups and a multi-select category filter (checkboxes)
-      - Starts the time animation automatically (autoplay)
-    -->
 <script>
       // ---- Derive slider interval from data (fallback to 1927–2026) ----
       function getYearRange(arr) {
@@ -319,28 +310,6 @@ var CategoryControl = L.Control.extend({
 map.addControl(new CategoryControl());
 
 
-// ---- Autoplay (robust) ----
-(function(){
-  function tryStart(){
-    try{
-      if (!map || !map._tdPlayer || !map._tdPlayer.start) return;
-      var playing = false;
-      try { if (typeof map._tdPlayer.isPlaying === 'function') playing = map._tdPlayer.isPlaying(); } catch(e) {}
-      if (!playing) map._tdPlayer.start();
-    } catch(e) {}
-  }
-  // Start after first time slice loads
-  map.timeDimension.on('timeload', function(){
-    // small delay so layers are in place
-    setTimeout(tryStart, 150);
-  });
-  // Fallbacks
-  window.addEventListener('load', function(){ setTimeout(tryStart, 600); });
-  setTimeout(tryStart, 1200);
-})();
-
-
-
 
       // ---- Legend ----
       // Legend removed
@@ -364,17 +333,15 @@ function bindSearchAutoPopup() {
     // Pause autoplay so the popup does not disappear on the next tick
     try { if (map._tdPlayer && map._tdPlayer.isPlaying && map._tdPlayer.isPlaying()) map._tdPlayer.stop(); } catch(err) {}
     try { if (map._tdControl && map._tdControl._player && map._tdControl._player.isPlaying && map._tdControl._player.isPlaying()) map._tdControl._player.stop(); } catch(err) {}
-
-    var uid = lyr.feature.properties._uid;
     var t = Date.parse(String(lyr.feature.properties.start_date || '').trim());
 
-    function openWhenReady() { openPopupForUid(uid); }
+    function openNow(){ try{ lyr.openPopup(); }catch(e){} }
 
     if (!isNaN(t)) {
-      map.timeDimension.once('timeload', openWhenReady);
+      map.timeDimension.once('timeload', openNow);
       map.timeDimension.setCurrentTime(t);
     } else {
-      openWhenReady();
+      openNow();
     }
   });
 }
@@ -386,34 +353,6 @@ function bindSearchAutoPopup() {
       if (typeof milanoSitesNoCoords !== 'undefined' && milanoSitesNoCoords.length) {
         console.log("Records without coordinates (not mapped):", milanoSitesNoCoords.length);
       }
-      // ---- Autoplay (robust) ----
-(function enableAutoplay() {
-  var started = false;
-
-  function getPlayer() {
-    if (map && map._tdPlayer && typeof map._tdPlayer.start === 'function') return map._tdPlayer;
-    if (map && map._tdControl && map._tdControl._player && typeof map._tdControl._player.start === 'function') return map._tdControl._player;
-    return null;
-  }
-
-  function tryStart() {
-    if (started) return;
-    var p = getPlayer();
-    if (!p) return;
-    started = true;
-    try { p.start(); } catch(e) { started = false; }
-  }
-
-  map.whenReady(function() {
-    // Start after the first timeload so the control is fully initialised
-    if (map.timeDimension) {
-      map.timeDimension.once('timeload', function() { tryStart(); });
-    }
-    // Fallback: start anyway after a short delay
-    setTimeout(tryStart, 800);
-    setTimeout(tryStart, 1600);
-  });
-})();
 
     </script>
   </body>
